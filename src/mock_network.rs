@@ -4,38 +4,40 @@ use crate::raft_node::{AppendEntriesReply, RaftNode};
 use serde_json::{Error, Value};
 use crate::errors::NetworkErrors;
 
-pub struct Network {
+pub struct InMemoryNetwork {
     reliable: bool,
     long_delays: bool,
     servers: HashMap<String, Arc<Mutex<Server>>>,
-    // reply_channel:
+    recv_channel: mpsc::Receiver<NetworkRequest>,
+    send_channel: Arc<Mutex<mpsc::Sender<NetworkRequest>>>,
 }
 
-impl Network {
-    pub fn new(reliable: bool, long_delays: bool) -> Self {
-        /*
-            // single goroutine to handle all ClientEnd.Call()s
-            go func() {
-                for {
-                    select {
-                    case xreq := <-rn.endCh:
-                        atomic.AddInt32(&rn.count, 1)
-                        atomic.AddInt64(&rn.bytes, int64(len(xreq.args)))
-                        go rn.processReq(xreq)
-                    case <-rn.done:
-                        return
-                    }
-                }
-            }()
-         */
+impl InMemoryNetwork {
+    pub fn new(reliable: bool, long_delays: bool, server_count: i8) -> Self {
 
-        Network{ reliable, long_delays, servers: Default::default() }
+        let (send, recv) = mpsc::channel();
+        let sender = Arc::new(Mutex::new(send));
+        InMemoryNetwork { reliable, long_delays, servers: Default::default(), recv_channel: recv, send_channel: sender}
     }
 
-    pub fn send_request(&self, request: NetworkRequest) -> Result<NetworkReply, NetworkErrors>{
-        let raw_response = serde_json::to_value(&AppendEntriesReply{})?;
-        Ok(NetworkReply::new(false, raw_response))
+    pub async fn start(&self) {
+        tokio::spawn(async move {
+            while let Ok(req) = self.recv.recv() {
+                // process request
+            }
+        });
     }
+
+    // TODO: should have a way to make it easy to get copies of the send channel
+    //       which nodes can use to make requests across the network
+    // pub fn create_client() -> InMemoryNetworkClient {
+    //
+    // }
+
+    // pub fn send_request(&self, request: NetworkRequest) -> Result<NetworkReply, NetworkErrors>{
+    //     let raw_response = serde_json::to_value(&AppendEntriesReply{})?;
+    //     Ok(NetworkReply::new(false, raw_response))
+    // }
 
     // process request
     pub fn process_request(&self, request: NetworkRequest) {

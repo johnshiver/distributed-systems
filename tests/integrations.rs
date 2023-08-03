@@ -1,7 +1,7 @@
-use distributed_systems::mock_network::Network;
+use distributed_systems::mock_network::InMemoryNetwork;
 
 #[test]
 fn test_create_basic_network() {
-    // assert_eq!(mylib::add(2, 2), 4);
-    let net = Network::new(false, false);
+    let net = InMemoryNetwork::new(false, false, 3);
+    net.start();
 }

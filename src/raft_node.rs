@@ -1,9 +1,10 @@
-use crate::mock_network::{Network, NetworkRequest};
+use crate::mock_network::{InMemoryNetwork, NetworkRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::*;
 
-pub struct RaftNode {
-    network: Network,
+pub struct RaftNode  {
+    // network: &'a Network,
+    // peers
 }
 
 impl RaftNode {
@@ -23,7 +24,7 @@ impl RaftNode {
                 }
             }()
          */
-        RaftNode{network: Network::new(false, false)}
+        RaftNode{}
     }
 
     pub fn handle_append_entries(request: AppendEntriesRequest) -> AppendEntriesReply {
@@ -31,6 +32,10 @@ impl RaftNode {
         AppendEntriesReply{}
     }
 
+    // TODO: should be able to make generic method that handles the nitty gritty request details
+    //       let reply_channel = await self.client.send_request<AppendEntriesRequest>("hostname");
+    //       let reply_channel = await self.client.broadcast_request<AppendEntriesRequest>();
+    //       self.client.peers for access to each individual node;
     pub fn send_append_entries(&self, host: String, request: AppendEntriesRequest) -> AppendEntriesReply {
 
         // let raw_request = to_value(&request)?;
