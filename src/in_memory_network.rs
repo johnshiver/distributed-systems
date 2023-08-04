@@ -2,7 +2,6 @@ use crate::errors::NetworkErrors;
 use crate::raft_node::{AppendEntriesReply, RaftNode};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{timeout, Duration};
 
@@ -17,7 +16,7 @@ pub struct InMemoryNetwork {
 
 impl InMemoryNetwork {
     pub fn new(reliable: bool, long_delays: bool, server_count: i8) -> Self {
-        let (send, recv) = mpsc::channel(0);
+        let (send, recv) = mpsc::channel(1);
         let sender = Arc::new(Mutex::new(send));
         let receiver = Arc::new(Mutex::new(recv));
 
@@ -29,7 +28,9 @@ impl InMemoryNetwork {
 
         // init servers
         let servers = Arc::new(Mutex::new(
-            (0..server_count).map(|_| Server::new()).collect::<Vec<_>>(),
+            (0..server_count)
+                .map(|_| Server::new(NetworkClient::new(server_count, sender.clone())))
+                .collect::<Vec<_>>(),
         ));
 
         InMemoryNetwork {
@@ -55,6 +56,8 @@ impl InMemoryNetwork {
                 if !self.servers_are_connected(req.origin_server, req.destination_server) {
                     let _ = req
                         .send_reply
+                        .lock()
+                        .await
                         .send(NetworkReply {
                             ok: false,
                             reply: Default::default(),
@@ -101,10 +104,19 @@ impl NetworkClient {
 
     pub async fn send_request(
         &self,
-        mut request: &NetworkRequest,
+        request: NetworkRequest,
     ) -> Result<NetworkReply, NetworkErrors> {
-        self.send_requests.lock().await.send(request).await?;
-        return match timeout(Duration::from_secs(3), request.receive_reply.recv()).await {
+        self.send_requests
+            .lock()
+            .await
+            .send(request.clone())
+            .await?;
+        return match timeout(
+            Duration::from_secs(3),
+            request.receive_reply.lock().await.recv(),
+        )
+        .await
+        {
             Ok(Some(message)) => Ok(message),
             Ok(None) => Err(NetworkErrors::Unknown),
             Err(_) => Err(NetworkErrors::Timeout),
@@ -117,9 +129,9 @@ struct Server {
 }
 
 impl Server {
-    pub fn new() -> Self {
+    pub fn new(network_client: NetworkClient) -> Self {
         Server {
-            raft: RaftNode::new(),
+            raft: RaftNode::new(network_client),
         }
     }
     fn dispatch(req: NetworkRequest) -> Result<NetworkReply, NetworkErrors> {
@@ -152,13 +164,14 @@ impl Server {
     }
 }
 
+#[derive(Clone)]
 pub struct NetworkRequest {
     origin_server: i8,      // e.g. which server initiated the request
     destination_server: i8, // e.g. which server to send request to
     svc_method: String,     // e.g. "Raft.AppendEntries"
     raw_request: Value,
-    receive_reply: mpsc::Receiver<NetworkReply>,
-    send_reply: mpsc::Sender<NetworkReply>,
+    receive_reply: Arc<Mutex<mpsc::Receiver<NetworkReply>>>,
+    send_reply: Arc<Mutex<mpsc::Sender<NetworkReply>>>,
 }
 
 impl NetworkRequest {
@@ -169,8 +182,8 @@ impl NetworkRequest {
             destination_server: destination,
             svc_method: method,
             raw_request,
-            send_reply: send,
-            receive_reply: recv,
+            send_reply: Arc::new(Mutex::new(send)),
+            receive_reply: Arc::new(Mutex::new(recv)),
         }
     }
 }

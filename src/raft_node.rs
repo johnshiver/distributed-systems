@@ -1,4 +1,4 @@
-use crate::in_memory_network::{NetworkClient, NetworkRequest};
+use crate::in_memory_network::NetworkClient;
 use serde::{Deserialize, Serialize};
 
 pub struct RaftNode {
@@ -7,7 +7,7 @@ pub struct RaftNode {
 }
 
 impl RaftNode {
-    pub fn new() -> Self {
+    pub fn new(network_client: NetworkClient) -> Self {
         /*
            // single goroutine to handle all ClientEnd.Call()s
            go func() {
@@ -23,7 +23,7 @@ impl RaftNode {
                }
            }()
         */
-        RaftNode {}
+        RaftNode { network_client }
     }
 
     pub fn handle_append_entries(request: AppendEntriesRequest) -> AppendEntriesReply {
