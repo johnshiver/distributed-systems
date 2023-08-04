@@ -43,9 +43,58 @@ impl InMemoryNetwork {
         }
     }
 
-    fn servers_are_connected(&self, sender: i8, recipient: i8) -> bool {
+    pub async fn servers_are_connected(&self, sender: i8, recipient: i8) -> bool {
+        let connections = self.network_connections.lock().await;
+        if sender as usize >= connections.len() || recipient as usize >= connections.len() {
+            false
+        } else {
+            connections[sender as usize][recipient as usize]
+        }
+    }
+
+    pub async fn add_server(&self, server: usize) {
+        // let mut servers = self.servers.lock().await;
+        // servers.push(server);
+        // let mut network_connections = self.network_connections.lock().await;
+        // for row in network_connections.iter_mut() {
+        //     row.push(true);
+        // }
+        // network_connections.push(vec![true; servers.len()]);
+        // drop(servers); // Explicitly drop the lock to release it.
+        // drop(network_connections); // Explicitly drop the lock to release it.
+    }
+
+    // Removes a server from the network and update the network_connections matrix.
+    pub async fn remove_server(&self, index: usize) -> bool {
+        // let mut servers = self.servers.lock().await;
+        // let removed = if index < servers.len() {
+        //     let removed = servers.remove(index);
+        //     let mut network_connections = self.network_connections.lock().await;
+        //     for row in network_connections.iter_mut() {
+        //         row.remove(index);
+        //     }
+        //     network_connections.remove(index);
+        //     drop(network_connections); // Explicitly drop the lock to release it.
+        //     Some(removed)
+        // } else {
+        //     None
+        // };
+        // drop(servers); // Explicitly drop the lock to release it.
+        // removed
         false
     }
+
+    // Gets a server from the network by index.
+    // pub async fn get_server(&self, index: usize) -> Option<Server> {
+    //     let servers = self.servers.lock().await;
+    //     let server = if index < servers.len() {
+    //         Some(servers[index].clone()) // This requires that Server implements Clone.
+    //     } else {
+    //         None
+    //     };
+    //     drop(servers); // Explicitly drop the lock to release it.
+    //     server
+    // }
 
     pub async fn start(self: Arc<Self>) {
         let receiver = Arc::clone(&self.receive_requests);
@@ -53,7 +102,10 @@ impl InMemoryNetwork {
         tokio::spawn(async move {
             while let Some(req) = receiver.lock().await.recv().await {
                 // check if there is an active connection between the servers
-                if !self.servers_are_connected(req.origin_server, req.destination_server) {
+                if !self
+                    .servers_are_connected(req.origin_server, req.destination_server)
+                    .await
+                {
                     let _ = req
                         .send_reply
                         .lock()
@@ -245,3 +297,24 @@ impl NetworkReply {
 // return false
 // }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_servers_are_connected() {
+        let network = InMemoryNetwork::new(true, false, 3);
+
+        // Since the initial network_connections are set to true, servers 1 and 2 should be connected.
+        assert_eq!(network.servers_are_connected(0, 1).await, true);
+    }
+
+    #[tokio::test]
+    async fn test_servers_are_not_connected() {
+        let network = InMemoryNetwork::new(true, false, 3);
+        let _ = network.remove_server(1); // Removes the connection between server 1 and 2.
+
+        assert_eq!(network.servers_are_connected(0, 1).await, false);
+    }
+}
