@@ -1,5 +1,6 @@
 use crate::errors::NetworkErrors;
 use crate::raft_node::{AppendEntriesReply, RaftNode};
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -29,7 +30,12 @@ impl InMemoryNetwork {
         // init servers
         let servers = Arc::new(Mutex::new(
             (0..server_count)
-                .map(|_| Server::new(NetworkClient::new(server_count, sender.clone())))
+                .map(|i| {
+                    Server::new(
+                        i as usize,
+                        InMemoryNetworkClient::new(server_count, sender.clone()),
+                    )
+                })
                 .collect::<Vec<_>>(),
         ));
 
@@ -43,12 +49,12 @@ impl InMemoryNetwork {
         }
     }
 
-    pub async fn servers_are_connected(&self, sender: i8, recipient: i8) -> bool {
+    pub async fn servers_are_connected(&self, sender: usize, recipient: usize) -> bool {
         let connections = self.network_connections.lock().await;
-        if sender as usize >= connections.len() || recipient as usize >= connections.len() {
+        if sender >= connections.len() || recipient >= connections.len() {
             false
         } else {
-            connections[sender as usize][recipient as usize]
+            connections[sender][recipient]
         }
     }
 
@@ -124,8 +130,8 @@ impl InMemoryNetwork {
                         .await;
                 } else {
                     //
-                    // let servers = self.servers.lock().unwrap();
-                    // let target_server = servers.get(req.target_server);
+                    let servers = self.servers.lock().await;
+                    if let Some(target_server) = servers.get(req.destination_server as usize) {}
 
                     // process request
                 }
@@ -133,11 +139,13 @@ impl InMemoryNetwork {
         });
     }
 
-    // TODO: should have a way to make it easy to get copies of the send channel
-    //       which nodes can use to make requests across the network
-    // pub fn create_client() -> InMemoryNetworkClient {
-    //
-    // }
+    // if you want to send requests to the network use NetworkClient
+    pub async fn create_client(&self) -> InMemoryNetworkClient {
+        InMemoryNetworkClient::new(
+            self.network_connections.lock().await.len() as i8,
+            self.send_requests.clone(),
+        )
+    }
 
     // pub fn send_request(&self, request: NetworkRequest) -> Result<NetworkReply, NetworkErrors>{
     //     let raw_response = serde_json::to_value(&AppendEntriesReply{})?;
@@ -148,14 +156,14 @@ impl InMemoryNetwork {
     pub fn process_request(&self, request: NetworkRequest) {}
 }
 
-pub struct NetworkClient {
+pub struct InMemoryNetworkClient {
     send_requests: Arc<Mutex<mpsc::Sender<NetworkRequest>>>,
     peers: Vec<i8>,
 }
 
-impl NetworkClient {
+impl InMemoryNetworkClient {
     pub fn new(peer_count: i8, sender: Arc<Mutex<mpsc::Sender<NetworkRequest>>>) -> Self {
-        NetworkClient {
+        InMemoryNetworkClient {
             send_requests: sender,
             peers: vec![],
         }
@@ -188,9 +196,9 @@ struct Server {
 }
 
 impl Server {
-    pub fn new(network_client: NetworkClient) -> Self {
+    pub fn new(id: usize, network_client: InMemoryNetworkClient) -> Self {
         Server {
-            raft: RaftNode::new(network_client),
+            raft: RaftNode::new(id, network_client),
         }
     }
     fn dispatch(req: NetworkRequest) -> Result<NetworkReply, NetworkErrors> {
@@ -225,16 +233,15 @@ impl Server {
 
 #[derive(Clone)]
 pub struct NetworkRequest {
-    origin_server: i8,      // e.g. which server initiated the request
-    destination_server: i8, // e.g. which server to send request to
-    svc_method: String,     // e.g. "Raft.AppendEntries"
+    origin_server: usize,      // e.g. which server initiated the request
+    destination_server: usize, // e.g. which server to send request to
+    svc_method: String,        // e.g. "Raft.AppendEntries"
     raw_request: Value,
     receive_reply: Arc<Mutex<mpsc::Receiver<NetworkReply>>>,
     send_reply: Arc<Mutex<mpsc::Sender<NetworkReply>>>,
 }
-
 impl NetworkRequest {
-    pub fn new(origin: i8, destination: i8, method: String, raw_request: Value) -> Self {
+    pub fn new(origin: usize, destination: usize, method: String, raw_request: Value) -> Self {
         let (send, recv) = mpsc::channel(0);
         NetworkRequest {
             origin_server: origin,
@@ -247,9 +254,10 @@ impl NetworkRequest {
     }
 }
 
+#[derive(Clone, Deserialize)]
 pub struct NetworkReply {
-    ok: bool,
-    reply: Value,
+    pub ok: bool,
+    pub reply: Value,
 }
 
 impl NetworkReply {
