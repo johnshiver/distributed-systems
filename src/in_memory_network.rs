@@ -52,36 +52,43 @@ impl InMemoryNetwork {
         }
     }
 
-    pub async fn add_server(&self, server: usize) {
-        // let mut servers = self.servers.lock().await;
-        // servers.push(server);
-        // let mut network_connections = self.network_connections.lock().await;
-        // for row in network_connections.iter_mut() {
-        //     row.push(true);
-        // }
-        // network_connections.push(vec![true; servers.len()]);
-        // drop(servers); // Explicitly drop the lock to release it.
-        // drop(network_connections); // Explicitly drop the lock to release it.
+    pub async fn add_server(&self, server: usize) -> bool {
+        let mut servers = self.network_connections.lock().await;
+        if server >= servers.len() {
+            return false;
+        }
+        for (i, connections) in servers.iter_mut().enumerate() {
+            for (j, is_connected) in connections.iter_mut().enumerate() {
+                if i == server || j == server {
+                    *is_connected = true;
+                }
+                println!(
+                    "Connection status from server {} to server {}: {}",
+                    i, j, *is_connected
+                );
+            }
+        }
+        true
     }
 
     // Removes a server from the network and update the network_connections matrix.
-    pub async fn remove_server(&self, index: usize) -> bool {
-        // let mut servers = self.servers.lock().await;
-        // let removed = if index < servers.len() {
-        //     let removed = servers.remove(index);
-        //     let mut network_connections = self.network_connections.lock().await;
-        //     for row in network_connections.iter_mut() {
-        //         row.remove(index);
-        //     }
-        //     network_connections.remove(index);
-        //     drop(network_connections); // Explicitly drop the lock to release it.
-        //     Some(removed)
-        // } else {
-        //     None
-        // };
-        // drop(servers); // Explicitly drop the lock to release it.
-        // removed
-        false
+    pub async fn remove_server(&self, server: usize) -> bool {
+        let mut servers = self.network_connections.lock().await;
+        if server >= servers.len() {
+            return false;
+        }
+        for (i, connections) in servers.iter_mut().enumerate() {
+            for (j, is_connected) in connections.iter_mut().enumerate() {
+                if i == server || j == server {
+                    *is_connected = false;
+                }
+                println!(
+                    "Connection status from server {} to server {}: {}",
+                    i, j, *is_connected
+                );
+            }
+        }
+        true
     }
 
     // Gets a server from the network by index.
@@ -311,10 +318,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_servers_are_not_connected() {
+    async fn test_servers_remove_and_add() {
         let network = InMemoryNetwork::new(true, false, 3);
-        let _ = network.remove_server(1); // Removes the connection between server 1 and 2.
-
+        let removed = network.remove_server(1).await;
+        assert_eq!(removed, true);
         assert_eq!(network.servers_are_connected(0, 1).await, false);
+
+        let added = network.add_server(1).await;
+        assert_eq!(added, true);
+        assert_eq!(network.servers_are_connected(0, 1).await, true);
     }
 }
