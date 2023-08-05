@@ -1,6 +1,6 @@
 use crate::errors::NetworkErrors;
-use crate::in_memory_network::ServiceMethod::AppendEntries;
-use crate::in_memory_network::{InMemoryNetworkClient, NetworkRequest, ServiceMethod};
+use crate::in_memory_cluster::ServiceMethod::AppendEntries;
+use crate::in_memory_cluster::{InMemoryNetworkClient, NetworkRequest, ServiceMethod};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 
@@ -14,7 +14,7 @@ impl RaftNode {
         RaftNode { id, network_client }
     }
 
-    pub fn handle_append_entries(request: AppendEntriesRequest) -> AppendEntriesReply {
+    pub async fn handle_append_entries(&self, request: AppendEntriesRequest) -> AppendEntriesReply {
         AppendEntriesReply {}
     }
 

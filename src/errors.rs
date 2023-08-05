@@ -1,4 +1,4 @@
-use crate::in_memory_network::NetworkRequest;
+use crate::in_memory_cluster::NetworkRequest;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

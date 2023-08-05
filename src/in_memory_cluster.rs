@@ -1,5 +1,5 @@
 use crate::errors::NetworkErrors;
-use crate::raft_node::{AppendEntriesReply, RaftNode};
+use crate::raft_node::{AppendEntriesReply, AppendEntriesRequest, RaftNode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{to_value, Value};
@@ -130,11 +130,10 @@ impl InMemoryCluster {
                         })
                         .await;
                 } else {
-                    //
-                    let servers = self.servers.lock().await;
-                    if let Some(target_server) = servers.get(req.destination_server as usize) {}
-
-                    // process request
+                    let self_clone = Arc::clone(&self);
+                    tokio::spawn(async move {
+                        self_clone.process_request(req.clone());
+                    });
                 }
             }
         });
@@ -154,13 +153,19 @@ impl InMemoryCluster {
     // }
 
     // process request
-    pub fn process_request(&self, request: NetworkRequest) {}
+    pub async fn process_request(&self, request: NetworkRequest) {
+        let servers = self.servers.lock().await;
+        if let Some(target_server) = servers.get(request.destination_server) {
+            target_server.dispatch(request);
+        } else {
+            // log something / send network request 404
+        }
+    }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub enum ServiceMethod {
     AppendEntries,
-    // Add other variants here...
 }
 
 pub struct InMemoryNetworkClient {
@@ -232,33 +237,22 @@ impl Server {
             raft: RaftNode::new(id, network_client),
         }
     }
-    fn dispatch(req: NetworkRequest) -> Result<NetworkReply, NetworkErrors> {
-        // rs.mu.Lock()
-        //
-        // rs.count += 1
-        //
-        // // split Raft.AppendEntries into service and method
-        // dot := strings.LastIndex(req.svcMeth, ".")
-        // serviceName := req.svcMeth[:dot]
-        // methodName := req.svcMeth[dot+1:]
-        //
-        // service, ok := rs.services[serviceName]
-        //
-        // rs.mu.Unlock()
-        //
-        // if ok {
-        // return service.dispatch(methodName, req)
-        // } else {
-        // choices := []string{}
-        // for k, _ := range rs.services {
-        // choices = append(choices, k)
-        // }
-        // log.Fatalf("labrpc.Server.dispatch(): unknown service %v in %v.%v; expecting one of %v\n",
-        // serviceName, serviceName, methodName, choices)
-        // return replyMsg{false, nil}
-        // }
-        let raw_response = serde_json::to_value(&AppendEntriesReply {})?;
-        Ok(NetworkReply::new(false, raw_response))
+    pub async fn dispatch(&self, req: NetworkRequest) {
+        match req.svc_method {
+            ServiceMethod::AppendEntries => {
+                let append_entries_request: AppendEntriesRequest =
+                    serde_json::from_value(req.raw_request).unwrap();
+                let response = self
+                    .raft
+                    .handle_append_entries(append_entries_request)
+                    .await;
+                let raw_response = to_value(response).unwrap();
+                req.send_reply
+                    .lock()
+                    .await
+                    .send(NetworkReply::new(true, raw_response));
+            }
+        }
     }
 }
 
