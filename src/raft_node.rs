@@ -1,5 +1,6 @@
 use crate::errors::NetworkErrors;
-use crate::in_memory_network::{InMemoryNetworkClient, NetworkRequest};
+use crate::in_memory_network::ServiceMethod::AppendEntries;
+use crate::in_memory_network::{InMemoryNetworkClient, NetworkRequest, ServiceMethod};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 
@@ -27,20 +28,11 @@ impl RaftNode {
         request: AppendEntriesRequest,
     ) -> Result<AppendEntriesReply, NetworkErrors> {
         let raw_request = to_value(&request)?;
-        let raw_request = NetworkRequest::new(
-            self.id,
-            destination,
-            "AppendEntries".to_string(),
-            raw_request,
-        );
-        let network_reply = self.network_client.send_request(raw_request).await?;
-        let append_entries_reply: Result<AppendEntriesReply, serde_json::Error> =
-            serde_json::from_value(network_reply.reply);
-
-        match append_entries_reply {
-            Ok(reply) => Ok(reply),
-            Err(err) => Err(NetworkErrors::from(err)),
-        }
+        let network_reply: AppendEntriesReply = self
+            .network_client
+            .send_request(self.id, destination, AppendEntries, raw_request)
+            .await?;
+        Ok(network_reply)
     }
 }
 

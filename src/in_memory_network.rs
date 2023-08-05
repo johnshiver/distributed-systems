@@ -1,7 +1,8 @@
 use crate::errors::NetworkErrors;
 use crate::raft_node::{AppendEntriesReply, RaftNode};
-use serde::Deserialize;
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::{to_value, Value};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{timeout, Duration};
@@ -156,6 +157,12 @@ impl InMemoryNetwork {
     pub fn process_request(&self, request: NetworkRequest) {}
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub enum ServiceMethod {
+    AppendEntries,
+    // Add other variants here...
+}
+
 pub struct InMemoryNetworkClient {
     send_requests: Arc<Mutex<mpsc::Sender<NetworkRequest>>>,
     peers: Vec<i8>,
@@ -169,7 +176,31 @@ impl InMemoryNetworkClient {
         }
     }
 
-    pub async fn send_request(
+    pub async fn send_request<R, S>(
+        &self,
+        origin: usize,
+        destination: usize,
+        svc_method: ServiceMethod,
+        request: R,
+    ) -> Result<S, NetworkErrors>
+    where
+        R: Serialize,
+        S: DeserializeOwned,
+    {
+        let raw_request = to_value(&request)?;
+        let raw_request = NetworkRequest::new(origin, destination, svc_method, raw_request);
+        let network_reply = self.send_raw_request(raw_request).await?;
+        if !network_reply.ok {
+            return Err(NetworkErrors::Timeout);
+        }
+        let reply: Result<S, serde_json::Error> = serde_json::from_value(network_reply.reply);
+        match reply {
+            Ok(reply) => Ok(reply),
+            Err(err) => Err(NetworkErrors::from(err)),
+        }
+    }
+
+    async fn send_raw_request(
         &self,
         request: NetworkRequest,
     ) -> Result<NetworkReply, NetworkErrors> {
@@ -235,13 +266,18 @@ impl Server {
 pub struct NetworkRequest {
     origin_server: usize,      // e.g. which server initiated the request
     destination_server: usize, // e.g. which server to send request to
-    svc_method: String,        // e.g. "Raft.AppendEntries"
+    svc_method: ServiceMethod, // e.g. "Raft.AppendEntries"
     raw_request: Value,
     receive_reply: Arc<Mutex<mpsc::Receiver<NetworkReply>>>,
     send_reply: Arc<Mutex<mpsc::Sender<NetworkReply>>>,
 }
 impl NetworkRequest {
-    pub fn new(origin: usize, destination: usize, method: String, raw_request: Value) -> Self {
+    pub fn new(
+        origin: usize,
+        destination: usize,
+        method: ServiceMethod,
+        raw_request: Value,
+    ) -> Self {
         let (send, recv) = mpsc::channel(0);
         NetworkRequest {
             origin_server: origin,
