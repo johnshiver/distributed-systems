@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{timeout, Duration};
 
-pub struct InMemoryNetwork {
+pub struct InMemoryCluster {
     reliable: bool,
     long_delays: bool,
     servers: Arc<Mutex<Vec<Server>>>,
@@ -16,7 +16,7 @@ pub struct InMemoryNetwork {
     send_requests: Arc<Mutex<mpsc::Sender<NetworkRequest>>>,
 }
 
-impl InMemoryNetwork {
+impl InMemoryCluster {
     pub fn new(reliable: bool, long_delays: bool, server_count: i8) -> Self {
         let (send, recv) = mpsc::channel(1);
         let sender = Arc::new(Mutex::new(send));
@@ -40,7 +40,7 @@ impl InMemoryNetwork {
                 .collect::<Vec<_>>(),
         ));
 
-        InMemoryNetwork {
+        InMemoryCluster {
             reliable,
             long_delays,
             servers,
@@ -355,7 +355,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_servers_are_connected() {
-        let network = InMemoryNetwork::new(true, false, 3);
+        let network = InMemoryCluster::new(true, false, 3);
 
         // Since the initial network_connections are set to true, servers 1 and 2 should be connected.
         assert_eq!(network.servers_are_connected(0, 1).await, true);
@@ -363,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_servers_remove_and_add() {
-        let network = InMemoryNetwork::new(true, false, 3);
+        let network = InMemoryCluster::new(true, false, 3);
         let removed = network.remove_server(1).await;
         assert_eq!(removed, true);
         assert_eq!(network.servers_are_connected(0, 1).await, false);
