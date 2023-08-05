@@ -15,24 +15,33 @@ impl RaftNode {
     }
 
     pub async fn handle_append_entries(&self, request: AppendEntriesRequest) -> AppendEntriesReply {
+        println!("{} received append entries request", self.id);
         AppendEntriesReply {}
     }
 
-    // TODO: should be able to make generic method that handles the nitty gritty request details
-    //       let reply_channel = await self.client.send_request<AppendEntriesRequest>("hostname");
-    //       let reply_channel = await self.client.broadcast_request<AppendEntriesRequest>();
-    //       self.client.peers for access to each individual node;
     pub async fn send_append_entries(
         &self,
         destination: usize,
         request: AppendEntriesRequest,
     ) -> Result<AppendEntriesReply, NetworkErrors> {
+        println!("{} sending append entries request", self.id);
         let raw_request = to_value(&request)?;
-        let network_reply: AppendEntriesReply = self
+        let reply: AppendEntriesReply = self
             .network_client
             .send_request(self.id, destination, AppendEntries, raw_request)
             .await?;
-        Ok(network_reply)
+        println!("{} received append entries reply", self.id);
+        Ok(reply)
+    }
+
+    pub async fn start(&self) {
+        if self.id == 1 {
+            println!("sending request");
+            let reply = self.send_append_entries(0, AppendEntriesRequest {}).await;
+            if reply.is_ok() {
+                println!("{} success", self.id)
+            }
+        }
     }
 }
 

@@ -3,6 +3,7 @@ use crate::raft_node::{AppendEntriesReply, AppendEntriesRequest, RaftNode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{to_value, Value};
+use std::process::id;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{timeout, Duration};
@@ -98,21 +99,16 @@ impl InMemoryCluster {
         true
     }
 
-    // Gets a server from the network by index.
-    // pub async fn get_server(&self, index: usize) -> Option<Server> {
-    //     let servers = self.servers.lock().await;
-    //     let server = if index < servers.len() {
-    //         Some(servers[index].clone()) // This requires that Server implements Clone.
-    //     } else {
-    //         None
-    //     };
-    //     drop(servers); // Explicitly drop the lock to release it.
-    //     server
-    // }
-
     pub async fn start(self: Arc<Self>) {
-        let receiver = Arc::clone(&self.receive_requests);
+        {
+            let servers = self.servers.lock().await;
+            for server in servers.iter() {
+                println!("starting server");
+                server.start().await;
+            }
+        }
 
+        let receiver = Arc::clone(&self.receive_requests);
         tokio::spawn(async move {
             while let Some(req) = receiver.lock().await.recv().await {
                 // check if there is an active connection between the servers
@@ -132,7 +128,8 @@ impl InMemoryCluster {
                 } else {
                     let self_clone = Arc::clone(&self);
                     tokio::spawn(async move {
-                        self_clone.process_request(req.clone());
+                        println!("processing request");
+                        self_clone.process_request(req.clone()).await;
                     });
                 }
             }
@@ -147,16 +144,10 @@ impl InMemoryCluster {
         )
     }
 
-    // pub fn send_request(&self, request: NetworkRequest) -> Result<NetworkReply, NetworkErrors>{
-    //     let raw_response = serde_json::to_value(&AppendEntriesReply{})?;
-    //     Ok(NetworkReply::new(false, raw_response))
-    // }
-
-    // process request
     pub async fn process_request(&self, request: NetworkRequest) {
         let servers = self.servers.lock().await;
         if let Some(target_server) = servers.get(request.destination_server) {
-            target_server.dispatch(request);
+            target_server.dispatch(request).await;
         } else {
             // log something / send network request 404
         }
@@ -193,8 +184,8 @@ impl InMemoryNetworkClient {
         S: DeserializeOwned,
     {
         let raw_request = to_value(&request)?;
-        let raw_request = NetworkRequest::new(origin, destination, svc_method, raw_request);
-        let network_reply = self.send_raw_request(raw_request).await?;
+        let network_request = NetworkRequest::new(origin, destination, svc_method, raw_request);
+        let network_reply = self.send_raw_request(network_request).await?;
         if !network_reply.ok {
             return Err(NetworkErrors::Timeout);
         }
@@ -222,7 +213,10 @@ impl InMemoryNetworkClient {
         {
             Ok(Some(message)) => Ok(message),
             Ok(None) => Err(NetworkErrors::Unknown),
-            Err(_) => Err(NetworkErrors::Timeout),
+            Err(err) => {
+                println!("received error {}", err);
+                Err(NetworkErrors::Timeout)
+            }
         };
     }
 }
@@ -237,6 +231,11 @@ impl Server {
             raft: RaftNode::new(id, network_client),
         }
     }
+
+    pub async fn start(&self) {
+        self.raft.start().await;
+    }
+
     pub async fn dispatch(&self, req: NetworkRequest) {
         match req.svc_method {
             ServiceMethod::AppendEntries => {
@@ -247,10 +246,12 @@ impl Server {
                     .handle_append_entries(append_entries_request)
                     .await;
                 let raw_response = to_value(response).unwrap();
-                req.send_reply
+                let _ = req
+                    .send_reply
                     .lock()
                     .await
-                    .send(NetworkReply::new(true, raw_response));
+                    .send(NetworkReply::new(true, raw_response))
+                    .await;
             }
         }
     }
@@ -272,7 +273,7 @@ impl NetworkRequest {
         method: ServiceMethod,
         raw_request: Value,
     ) -> Self {
-        let (send, recv) = mpsc::channel(0);
+        let (send, recv) = mpsc::channel(1);
         NetworkRequest {
             origin_server: origin,
             destination_server: destination,
