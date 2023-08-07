@@ -1,16 +1,20 @@
 use crate::errors::NetworkErrors;
-use crate::raft_node::{AppendEntriesReply, AppendEntriesRequest, RaftNode};
+use crate::raft_node::{AppendEntriesRequest, RaftNode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{to_value, Value};
-use std::process::id;
+use std::ops::Deref;
 use std::sync::Arc;
+use tokio::select;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
+use tokio_util::sync::CancellationToken;
 
 pub struct InMemoryCluster {
     reliable: bool,
     long_delays: bool,
+    token: CancellationToken,
     servers: Arc<Mutex<Vec<Server>>>,
     network_connections: Arc<Mutex<Vec<Vec<bool>>>>, // e.g. network_connections[x][y] == true means server x can talk to server y
     receive_requests: Arc<Mutex<mpsc::Receiver<NetworkRequest>>>,
@@ -29,6 +33,8 @@ impl InMemoryCluster {
             server_count as usize
         ]));
 
+        let token = CancellationToken::new();
+
         // init servers
         let servers = Arc::new(Mutex::new(
             (0..server_count)
@@ -36,6 +42,7 @@ impl InMemoryCluster {
                     Server::new(
                         i as usize,
                         InMemoryNetworkClient::new(server_count, sender.clone()),
+                        token.clone(),
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -48,6 +55,7 @@ impl InMemoryCluster {
             receive_requests: receiver,
             send_requests: sender,
             network_connections,
+            token,
         }
     }
 
@@ -99,23 +107,33 @@ impl InMemoryCluster {
         true
     }
 
-    pub async fn start(self: Arc<Self>) {
+    pub async fn stop(&self) {
+        self.token.cancel();
+    }
+
+    pub async fn start(self: Arc<Self>) -> JoinHandle<()> {
         {
-            let servers = self.servers.lock().await;
+            let mut servers = self.servers.lock().await;
             for server in servers.iter() {
-                println!("starting server");
-                server.start().await;
+                println!("Starting server");
+                Arc::new(server).start().await;
             }
         }
 
-        let receiver = Arc::clone(&self.receive_requests);
-        tokio::spawn(async move {
-            while let Some(req) = receiver.lock().await.recv().await {
-                // check if there is an active connection between the servers
-                if !self
-                    .servers_are_connected(req.origin_server, req.destination_server)
-                    .await
-                {
+        let cloned_token = self.token.clone();
+        let join_handle = tokio::spawn(async move {
+            let mut locked_receive_requests = self.receive_requests.lock().await;
+            select! {
+                _ = cloned_token.cancelled() => {
+                    // The token was cancelled
+                    println!("token was canceled");
+                }
+                Some(req) = locked_receive_requests.recv() => {
+                    if !self
+                        .servers_are_connected(req.origin_server, req.destination_server)
+                        .await
+                    {
+                    println!("servers not connected");
                     let _ = req
                         .send_reply
                         .lock()
@@ -126,14 +144,16 @@ impl InMemoryCluster {
                         })
                         .await;
                 } else {
+                    println!("processing request");
                     let self_clone = Arc::clone(&self);
                     tokio::spawn(async move {
-                        println!("processing request");
                         self_clone.process_request(req.clone()).await;
                     });
                 }
+                }
             }
         });
+        join_handle
     }
 
     // if you want to send requests to the network use NetworkClient
@@ -145,12 +165,13 @@ impl InMemoryCluster {
     }
 
     pub async fn process_request(&self, request: NetworkRequest) {
-        let servers = self.servers.lock().await;
-        if let Some(target_server) = servers.get(request.destination_server) {
-            target_server.dispatch(request).await;
-        } else {
-            // log something / send network request 404
-        }
+        println!("processing request");
+        // let servers = self.servers.lock().await;
+        // if let Some(target_server) = servers.get(request.destination_server) {
+        //     target_server.dispatch(request).await;
+        // } else {
+        //     // log something / send network request 404
+        // }
     }
 }
 
@@ -222,18 +243,23 @@ impl InMemoryNetworkClient {
 }
 
 struct Server {
-    raft: RaftNode,
+    raft: Arc<Mutex<RaftNode>>,
+    token: CancellationToken,
 }
 
 impl Server {
-    pub fn new(id: usize, network_client: InMemoryNetworkClient) -> Self {
+    pub fn new(id: usize, network_client: InMemoryNetworkClient, token: CancellationToken) -> Self {
         Server {
-            raft: RaftNode::new(id, network_client),
+            raft: Arc::new(Mutex::new(RaftNode::new(id, network_client))),
+            token,
         }
     }
 
     pub async fn start(&self) {
-        self.raft.start().await;
+        tokio::spawn(async move {
+            let raft_clone = self.raft.clone();
+            let _ = raft_clone.lock().await.start().await;
+        });
     }
 
     pub async fn dispatch(&self, req: NetworkRequest) {
@@ -243,6 +269,8 @@ impl Server {
                     serde_json::from_value(req.raw_request).unwrap();
                 let response = self
                     .raft
+                    .lock()
+                    .await
                     .handle_append_entries(append_entries_request)
                     .await;
                 let raw_response = to_value(response).unwrap();
@@ -299,50 +327,6 @@ impl NetworkReply {
         }
     }
 }
-
-// Call send an RPC, wait for the reply.
-// the return value indicates success; false means that
-// no reply was received from the server.
-// func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bool {
-// req := reqMsg{}
-// req.endname = e.endname
-// req.svcMeth = svcMeth
-// req.argsType = reflect.TypeOf(args)
-// req.replyCh = make(chan replyMsg)
-//
-// qb := new(bytes.Buffer)
-// qe := labgob.NewEncoder(qb)
-// if err := qe.Encode(args); err != nil {
-// panic(err)
-// }
-// req.args = qb.Bytes()
-//
-// //
-// // send the request.
-// //
-// select {
-// case e.ch <- req:
-// // the request has been sent.
-// case <-e.done:
-// // entire Network has been destroyed.
-// return false
-// }
-//
-// //
-// // wait for the reply.
-// //
-// rep := <-req.replyCh
-// if rep.ok {
-// rb := bytes.NewBuffer(rep.reply)
-// rd := labgob.NewDecoder(rb)
-// if err := rd.Decode(reply); err != nil {
-// log.Fatalf("ClientEnd.Call(): decode reply: %v\n", err)
-// }
-// return true
-// } else {
-// return false
-// }
-// }
 
 #[cfg(test)]
 mod tests {
